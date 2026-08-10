@@ -1,0 +1,416 @@
+import { jsPDF } from 'jspdf'
+import autoTable from 'jspdf-autotable'
+import type { ParsedLog } from './types'
+
+type WorkshopInfo = {
+  razonSocial: string
+  operador: string
+  direccion: string
+  ciudad: string
+  provincia: string
+  telefono: string
+  email: string
+  matricula: string
+  vin: string
+}
+
+type TFn = (key: string, vars?: Record<string, string | number>) => string
+
+function get(meta: Record<string, string>, ...keys: string[]): string {
+  for (const k of keys) {
+    if (meta[k]) return meta[k]
+  }
+  return ''
+}
+
+function fileLabelFrom(meta: Record<string, string>): string {
+  const marca = get(meta, 'MARCA') || 'VEHICULO'
+  const modelo = get(meta, 'MODELO') || ''
+  return `${marca}_${modelo}_${new Date().toLocaleDateString('es-AR')}`.replace(
+    /\s+/g,
+    '_',
+  )
+}
+
+function drawFooter(doc: jsPDF, label: string, page: number, margin: number) {
+  const pageH = doc.internal.pageSize.getHeight()
+  doc.setFontSize(8)
+  doc.setTextColor(120, 120, 120)
+  doc.text(`${label}.pdf • ${page}`, margin, pageH - 18)
+}
+
+async function loadTexaLogoDataUrl(): Promise<string | null> {
+  try {
+    const res = await fetch('./texa-logo.png?v=1.5.0')
+    if (!res.ok) return null
+    const blob = await res.blob()
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsDataURL(blob)
+    })
+  } catch {
+    return null
+  }
+}
+
+function drawTexaLogo(
+  doc: jsPDF,
+  logoDataUrl: string | null,
+  pageW: number,
+  margin: number,
+  y = 18,
+  size = 36,
+) {
+  if (!logoDataUrl) return
+  doc.addImage(logoDataUrl, 'PNG', pageW - margin - size, y, size, size)
+}
+
+export async function exportPdfReport(
+  log: ParsedLog,
+  chartPages: string[],
+  workshop: WorkshopInfo,
+  t: TFn,
+): Promise<void> {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
+  const pageW = doc.internal.pageSize.getWidth()
+  const pageH = doc.internal.pageSize.getHeight()
+  const margin = 36
+  const label = fileLabelFrom(log.meta)
+  const logoDataUrl = await loadTexaLogoDataUrl()
+  let page = 1
+
+  drawTexaLogo(doc, logoDataUrl, pageW, margin, 14, 40)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(16)
+  doc.setTextColor(12, 37, 119)
+  doc.text(t('pdf.title'), pageW / 2, 42, { align: 'center' })
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8)
+  doc.setTextColor(90, 106, 128)
+  doc.text('Dynamic Parameter viewer', pageW / 2, 54, { align: 'center' })
+
+  const meta = log.meta
+  const tallerRows = [
+    [t('workshop.razonSocial'), workshop.razonSocial || '—', t('workshop.operador'), workshop.operador || '—'],
+    [t('workshop.direccion'), workshop.direccion || '—', t('workshop.provincia'), workshop.provincia || '—'],
+    [t('workshop.ciudad'), workshop.ciudad || '—', t('workshop.telefono'), workshop.telefono || '—'],
+    [t('workshop.email'), workshop.email || '—', '', ''],
+  ]
+
+  autoTable(doc, {
+    startY: 64,
+    theme: 'grid',
+    styles: { fontSize: 8, cellPadding: 3, textColor: [40, 40, 40] },
+    headStyles: {
+      fillColor: [12, 37, 119],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      halign: 'left',
+    },
+    head: [[{ content: t('pdf.taller'), colSpan: 4 }]],
+    body: tallerRows,
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 70, fillColor: [238, 242, 250] },
+      2: { fontStyle: 'bold', cellWidth: 70, fillColor: [238, 242, 250] },
+    },
+    margin: { left: margin, right: margin },
+  })
+
+  const vehRows = [
+    [t('workshop.matricula'), workshop.matricula || '—', t('workshop.vin'), workshop.vin || '—'],
+    [t('meta.MARCA'), get(meta, 'MARCA'), t('meta.MODELO'), get(meta, 'MODELO')],
+    [
+      t('meta.MOTORIZACION'),
+      get(meta, 'MOTORIZACION'),
+      t('meta.CODIGO MOTOR'),
+      get(meta, 'CODIGO MOTOR'),
+    ],
+    [
+      t('meta.TIPO SISTEMA'),
+      get(meta, 'TIPO SISTEMA'),
+      t('meta.SISTEMA'),
+      get(meta, 'SISTEMA'),
+    ],
+    [t('meta.PERIODO'), get(meta, 'PERIODO'), '', ''],
+  ]
+
+  const afterTaller = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable
+    .finalY
+
+  autoTable(doc, {
+    startY: afterTaller + 10,
+    theme: 'grid',
+    styles: { fontSize: 8, cellPadding: 3, textColor: [40, 40, 40] },
+    headStyles: {
+      fillColor: [12, 37, 119],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+    },
+    head: [[{ content: t('pdf.vehiculo'), colSpan: 4 }]],
+    body: vehRows,
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 80, fillColor: [238, 242, 250] },
+      2: { fontStyle: 'bold', cellWidth: 80, fillColor: [238, 242, 250] },
+    },
+    margin: { left: margin, right: margin },
+  })
+
+  const afterVeh = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY
+
+  autoTable(doc, {
+    startY: afterVeh + 10,
+    theme: 'grid',
+    styles: { fontSize: 8, cellPadding: 3 },
+    headStyles: {
+      fillColor: [12, 37, 119],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+    },
+    head: [[{ content: t('pdf.prueba'), colSpan: 4 }]],
+    body: [
+      [
+        t('pdf.inicio'),
+        get(meta, 'INICIO VIAJE'),
+        t('pdf.fin'),
+        get(meta, 'FIN VIAJE'),
+      ],
+    ],
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 80, fillColor: [238, 242, 250] },
+      2: { fontStyle: 'bold', cellWidth: 80, fillColor: [238, 242, 250] },
+    },
+    margin: { left: margin, right: margin },
+  })
+
+  const afterTest = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY
+
+  doc.setFillColor(12, 37, 119)
+  doc.rect(margin, afterTest + 10, pageW - margin * 2, 18, 'F')
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(9)
+  doc.setTextColor(255, 255, 255)
+  doc.text(t('pdf.autodiagnosis'), margin + 6, afterTest + 22)
+
+  const chartTopFirst = afterTest + 34
+  const chartW = pageW - margin * 2
+  const maxChartHFirst = pageH - chartTopFirst - 70
+  const maxChartHFull = pageH - margin - 50
+
+  chartPages.forEach((url, idx) => {
+    if (idx > 0) {
+      doc.addPage()
+      page += 1
+      drawTexaLogo(doc, logoDataUrl, pageW, margin, 12, 32)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(12)
+      doc.setTextColor(12, 37, 119)
+      doc.text(t('pdf.titleCont'), pageW / 2, margin + 8, {
+        align: 'center',
+      })
+    }
+
+    const top = idx === 0 ? chartTopFirst : margin + 24
+    const maxH = idx === 0 ? maxChartHFirst : maxChartHFull
+    const img = doc.getImageProperties(url)
+    const ratio = img.width / img.height
+    let drawW = chartW
+    let drawH = drawW / ratio
+    if (drawH > maxH) {
+      drawH = maxH
+      drawW = drawH * ratio
+    }
+
+    doc.addImage(url, 'PNG', margin, top, drawW, drawH)
+
+    if (idx === chartPages.length - 1) {
+      const sigY = Math.min(top + drawH + 28, pageH - 48)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      doc.setTextColor(33, 33, 33)
+      doc.text(t('pdf.sello'), pageW - margin - 120, sigY)
+      doc.text('_______________________________', pageW - margin - 160, sigY + 28)
+    }
+
+    drawFooter(doc, label, page, margin)
+  })
+
+  if (chartPages.length === 0) {
+    drawFooter(doc, label, page, margin)
+  }
+
+  doc.save(`${label}.pdf`)
+}
+
+export async function exportComparePdfReport(
+  logA: ParsedLog,
+  logB: ParsedLog,
+  chartPages: string[],
+  workshop: WorkshopInfo,
+  t: TFn,
+  opts: {
+    labelA: string
+    labelB: string
+    offsetA: number
+    offsetB: number
+    visibility: string
+  },
+): Promise<void> {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
+  const pageW = doc.internal.pageSize.getWidth()
+  const pageH = doc.internal.pageSize.getHeight()
+  const margin = 36
+  const marcaA = get(logA.meta, 'MARCA') || 'A'
+  const modeloA = get(logA.meta, 'MODELO') || ''
+  const label = `COMPARE_${marcaA}_${modeloA}_${new Date().toLocaleDateString('es-AR')}`.replace(
+    /\s+/g,
+    '_',
+  )
+  const logoDataUrl = await loadTexaLogoDataUrl()
+  let page = 1
+
+  drawTexaLogo(doc, logoDataUrl, pageW, margin, 14, 40)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(16)
+  doc.setTextColor(12, 37, 119)
+  doc.text(t('pdf.compareTitle'), pageW / 2, 42, { align: 'center' })
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8)
+  doc.setTextColor(90, 106, 128)
+  doc.text('Dynamic Parameter viewer', pageW / 2, 54, { align: 'center' })
+
+  const tallerRows = [
+    [t('workshop.razonSocial'), workshop.razonSocial || '—', t('workshop.operador'), workshop.operador || '—'],
+    [t('workshop.direccion'), workshop.direccion || '—', t('workshop.provincia'), workshop.provincia || '—'],
+    [t('workshop.ciudad'), workshop.ciudad || '—', t('workshop.telefono'), workshop.telefono || '—'],
+    [t('workshop.email'), workshop.email || '—', '', ''],
+  ]
+
+  autoTable(doc, {
+    startY: 64,
+    theme: 'grid',
+    styles: { fontSize: 8, cellPadding: 3, textColor: [40, 40, 40] },
+    headStyles: {
+      fillColor: [12, 37, 119],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      halign: 'left',
+    },
+    head: [[{ content: t('pdf.taller'), colSpan: 4 }]],
+    body: tallerRows,
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 70, fillColor: [238, 242, 250] },
+      2: { fontStyle: 'bold', cellWidth: 70, fillColor: [238, 242, 250] },
+    },
+    margin: { left: margin, right: margin },
+  })
+
+  const afterTaller = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable
+    .finalY
+
+  const visLabel =
+    opts.visibility === 'a'
+      ? t('vis.a')
+      : opts.visibility === 'b'
+        ? t('vis.b')
+        : t('vis.both')
+
+  autoTable(doc, {
+    startY: afterTaller + 10,
+    theme: 'grid',
+    styles: { fontSize: 8, cellPadding: 3, textColor: [40, 40, 40] },
+    headStyles: {
+      fillColor: [12, 37, 119],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+    },
+    head: [[{ content: t('pdf.compareLogs'), colSpan: 4 }]],
+    body: [
+      ['A', opts.labelA, t('pdf.inicio'), get(logA.meta, 'INICIO VIAJE') || '—'],
+      [
+        '',
+        `${get(logA.meta, 'MARCA')} ${get(logA.meta, 'MODELO')}`.trim() || logA.sourceName,
+        t('pdf.fin'),
+        get(logA.meta, 'FIN VIAJE') || '—',
+      ],
+      ['B', opts.labelB, t('pdf.inicio'), get(logB.meta, 'INICIO VIAJE') || '—'],
+      [
+        '',
+        `${get(logB.meta, 'MARCA')} ${get(logB.meta, 'MODELO')}`.trim() || logB.sourceName,
+        t('pdf.fin'),
+        get(logB.meta, 'FIN VIAJE') || '—',
+      ],
+      [
+        t('vis.title'),
+        visLabel,
+        t('shift.title'),
+        `A ${opts.offsetA >= 0 ? '+' : ''}${opts.offsetA.toFixed(1)}s · B ${opts.offsetB >= 0 ? '+' : ''}${opts.offsetB.toFixed(1)}s`,
+      ],
+    ],
+    columnStyles: {
+      0: { fontStyle: 'bold', cellWidth: 70, fillColor: [238, 242, 250] },
+      2: { fontStyle: 'bold', cellWidth: 70, fillColor: [238, 242, 250] },
+    },
+    margin: { left: margin, right: margin },
+  })
+
+  const afterCompare = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable
+    .finalY
+
+  doc.setFillColor(12, 37, 119)
+  doc.rect(margin, afterCompare + 10, pageW - margin * 2, 18, 'F')
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(9)
+  doc.setTextColor(255, 255, 255)
+  doc.text(t('pdf.autodiagnosis'), margin + 6, afterCompare + 22)
+
+  const chartTopFirst = afterCompare + 34
+  const chartW = pageW - margin * 2
+  const maxChartHFirst = pageH - chartTopFirst - 70
+  const maxChartHFull = pageH - margin - 50
+
+  chartPages.forEach((url, idx) => {
+    if (idx > 0) {
+      doc.addPage()
+      page += 1
+      drawTexaLogo(doc, logoDataUrl, pageW, margin, 12, 32)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(12)
+      doc.setTextColor(12, 37, 119)
+      doc.text(t('pdf.compareTitleCont'), pageW / 2, margin + 8, {
+        align: 'center',
+      })
+    }
+
+    const top = idx === 0 ? chartTopFirst : margin + 24
+    const maxH = idx === 0 ? maxChartHFirst : maxChartHFull
+    const img = doc.getImageProperties(url)
+    const ratio = img.width / img.height
+    let drawW = chartW
+    let drawH = drawW / ratio
+    if (drawH > maxH) {
+      drawH = maxH
+      drawW = drawH * ratio
+    }
+
+    doc.addImage(url, 'PNG', margin, top, drawW, drawH)
+
+    if (idx === chartPages.length - 1) {
+      const sigY = Math.min(top + drawH + 28, pageH - 48)
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(9)
+      doc.setTextColor(33, 33, 33)
+      doc.text(t('pdf.sello'), pageW - margin - 120, sigY)
+      doc.text('_______________________________', pageW - margin - 160, sigY + 28)
+    }
+
+    drawFooter(doc, label, page, margin)
+  })
+
+  if (chartPages.length === 0) {
+    drawFooter(doc, label, page, margin)
+  }
+
+  doc.save(`${label}.pdf`)
+}

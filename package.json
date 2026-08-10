@@ -1,0 +1,67 @@
+{
+  "name": "dynamic-parameter-viewer",
+  "private": true,
+  "version": "1.6.0",
+  "description": "Dynamic Parameter viewer — logueos de parámetros a gráficos de viaje",
+  "author": "Dynamic Parameter viewer",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "electron:dev": "vite",
+    "dist": "npm run build && electron-builder --win portable && node scripts/copy-exe.cjs",
+    "dist:dir": "npm run build && electron-builder --win dir"
+  },
+  "dependencies": {
+    "echarts": "^6.1.0",
+    "echarts-for-react": "^3.0.6",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/file-saver": "^2.0.7",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.4",
+    "electron": "^37.10.3",
+    "electron-builder": "^26.15.3",
+    "oxlint": "^1.75.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.0"
+  },
+  "build": {
+    "appId": "com.dynamic.parameterviewer",
+    "productName": "Dynamic Parameter viewer",
+    "directories": {
+      "output": "C:/Users/ss-tec6/AppData/Local/Temp/logueador-release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "build/icon.ico",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "Dynamic-Parameter-viewer-${version}-portable.${ext}"
+    },
+    "portable": {
+      "artifactName": "Dynamic-Parameter-viewer-${version}-portable.${ext}"
+    }
+  }
+}
