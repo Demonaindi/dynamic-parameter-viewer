@@ -4,6 +4,7 @@ import { ParamSelector } from './components/ParamSelector'
 import { StackedCharts, renderPanelsToDataUrls } from './components/StackedCharts'
 import { CompareCharts, renderComparePanelsToDataUrls } from './components/CompareCharts'
 import { CompareParamSelector } from './components/CompareParamSelector'
+import { MarksPanel } from './components/MarksPanel'
 import { ExportWorkshopModal } from './components/ExportWorkshopModal'
 import {
   loadWorkshop,
@@ -21,7 +22,7 @@ import {
   suggestAlignParams,
   type CompareVisibility,
 } from './lib/chartOption'
-import type { ParsedLog } from './lib/types'
+import type { ChartMark, ParsedLog } from './lib/types'
 import { useI18n } from './i18n/I18nContext'
 import './App.css'
 
@@ -46,6 +47,7 @@ export default function App() {
 
   const [log, setLog] = useState<ParsedLog | null>(null)
   const [selected, setSelected] = useState<string[]>([])
+  const [marks, setMarks] = useState<ChartMark[]>([])
   const [busy, setBusy] = useState(false)
   const [exporting, setExporting] = useState(false)
 
@@ -103,9 +105,11 @@ export default function App() {
         const parsed = await parseLogFile(file)
         setLog(parsed)
         setSelected(parsed.parameters.slice(0, 4).map((p) => p.name))
+        setMarks([])
       } catch (e) {
         setLog(null)
         setSelected([])
+        setMarks([])
         setError(mapError(e))
       } finally {
         setBusy(false)
@@ -113,6 +117,14 @@ export default function App() {
     },
     [mapError],
   )
+
+  const toggleMark = useCallback((index: number) => {
+    setMarks((prev) => {
+      const existing = prev.find((m) => m.index === index)
+      if (existing) return prev.filter((m) => m.id !== existing.id)
+      return [...prev, { id: `m-${index}-${Date.now()}`, index }]
+    })
+  }, [])
 
   const loadCompare = useCallback(
     async (slot: 'a' | 'b', file: File) => {
@@ -145,8 +157,13 @@ export default function App() {
     try {
       if (exportKind === 'analisis') {
         if (!log) return
-        const pages = await renderPanelsToDataUrls(log, selected, PDF_PANELS_PER_PAGE)
-        await exportPdfReport(log, pages, data, t)
+        const pages = await renderPanelsToDataUrls(
+          log,
+          selected,
+          PDF_PANELS_PER_PAGE,
+          marks,
+        )
+        await exportPdfReport(log, pages, data, t, { marks, selected })
       } else if (exportKind === 'comparativa') {
         if (!logA || !logB || compareSelected.length === 0) return
         const pages = await renderComparePanelsToDataUrls(
@@ -242,6 +259,13 @@ export default function App() {
                   </em>
                 </div>
                 <ParamSelector log={log} selected={selected} onChange={setSelected} />
+                <MarksPanel
+                  log={log}
+                  selected={selected}
+                  marks={marks}
+                  onRemove={(id) => setMarks((prev) => prev.filter((m) => m.id !== id))}
+                  onClear={() => setMarks([])}
+                />
               </>
             ) : (
               <div className="hint">{t('hint.analisis')}</div>
@@ -256,9 +280,16 @@ export default function App() {
                   <span>
                     {log.meta['MARCA'] || ''} {log.meta['MODELO'] || ''} ·{' '}
                     {log.meta['INICIO VIAJE'] || ''} → {log.meta['FIN VIAJE'] || ''}
+                    {marks.length > 0 ? ` · ${t('marks.count', { n: marks.length })}` : ''}
                   </span>
+                  <em className="marks-hint">{t('marks.hint')}</em>
                 </div>
-                <StackedCharts log={log} selected={selected} />
+                <StackedCharts
+                  log={log}
+                  selected={selected}
+                  marks={marks}
+                  onToggleMark={toggleMark}
+                />
               </>
             ) : (
               <div className="stage-empty">

@@ -1,6 +1,6 @@
 import type { EChartsOption } from 'echarts'
-import type { LogParameter, ParsedLog } from './types'
-import { CHART_COLORS } from './types'
+import type { ChartMark, LogParameter, ParsedLog } from './types'
+import { CHART_COLORS, MARK_COLORS } from './types'
 
 export const PANEL_HEIGHT = 210
 export const PDF_PANELS_PER_PAGE = 4
@@ -112,6 +112,80 @@ export function suggestAlignParams(names: string[]): string[] {
   return scored.sort((a, b) => b.score - a.score).map((x) => x.name)
 }
 
+export function formatSampleValue(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return '—'
+  const n = Number(v)
+  const abs = Math.abs(n)
+  if (abs >= 1000) return n.toFixed(0)
+  if (abs >= 10) return n.toFixed(1)
+  if (Number.isInteger(n)) return String(n)
+  return n.toFixed(2)
+}
+
+export function markLabel(order: number): string {
+  return `M${order}`
+}
+
+export function buildSeriesMarkExtras(
+  _log: ParsedLog,
+  param: LogParameter,
+  marks: ChartMark[],
+) {
+  if (marks.length === 0) {
+    return { markLine: undefined, markPoint: undefined }
+  }
+
+  const markLine = {
+    silent: true,
+    symbol: ['none', 'none'] as [string, string],
+    animation: false,
+    data: marks.map((m, i) => {
+      const color = MARK_COLORS[i % MARK_COLORS.length]
+      const value = param.values[m.index]
+      return {
+        name: markLabel(i + 1),
+        xAxis: m.index,
+        label: {
+          show: true,
+          position: 'insideEndTop' as const,
+          formatter: `${markLabel(i + 1)}\n${formatSampleValue(value)}`,
+          color,
+          fontSize: 10,
+          fontWeight: 700 as const,
+          lineHeight: 13,
+        },
+        lineStyle: {
+          color,
+          type: 'dashed' as const,
+          width: 1.6,
+        },
+      }
+    }),
+  }
+
+  const markPoint = {
+    silent: true,
+    animation: false,
+    symbol: 'circle',
+    symbolSize: 8,
+    data: marks
+      .map((m, i) => {
+        const value = param.values[m.index]
+        if (value === null || value === undefined) return null
+        const color = MARK_COLORS[i % MARK_COLORS.length]
+        return {
+          name: markLabel(i + 1),
+          coord: [m.index, value] as [number, number],
+          itemStyle: { color, borderColor: '#fff', borderWidth: 1.5 },
+          label: { show: false },
+        }
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null),
+  }
+
+  return { markLine, markPoint }
+}
+
 export function buildPanelOption(
   log: ParsedLog,
   param: LogParameter,
@@ -119,11 +193,14 @@ export function buildPanelOption(
   opts: {
     showXAxis: boolean
     showSlider: boolean
+    marks?: ChartMark[]
   },
 ): EChartsOption {
   const color = CHART_COLORS[colorIndex % CHART_COLORS.length]
   const { min, max } = yRange(param.values)
   const label = paramLabel(param)
+  const marks = opts.marks ?? []
+  const { markLine, markPoint } = buildSeriesMarkExtras(log, param, marks)
 
   return {
     animation: false,
@@ -222,6 +299,8 @@ export function buildPanelOption(
             ],
           },
         },
+        markLine,
+        markPoint,
       },
     ],
     dataZoom: [

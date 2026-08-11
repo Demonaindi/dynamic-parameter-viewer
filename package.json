@@ -1,7 +1,7 @@
 {
   "name": "dynamic-parameter-viewer",
   "private": true,
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Dynamic Parameter viewer — logueos de parámetros a gráficos de viaje",
   "author": "Dynamic Parameter viewer",
   "type": "module",

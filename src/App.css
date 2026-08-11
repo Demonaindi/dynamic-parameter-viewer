@@ -454,6 +454,66 @@ input {
   font-size: 0.8rem;
 }
 
+.stage-head .marks-hint {
+  margin: 0.15rem 0 0;
+  font-style: normal;
+  font-size: 0.78rem;
+  color: #e65100;
+  font-weight: 600;
+}
+
+.marks-help,
+.marks-empty {
+  margin: 0 0 0.55rem;
+  font-size: 0.75rem;
+  color: #9aafd4;
+  line-height: 1.35;
+}
+
+.marks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.marks-item {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.marks-item-top {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  justify-content: space-between;
+}
+
+.marks-item-top strong {
+  font-size: 0.82rem;
+  min-width: 1.6rem;
+}
+
+.marks-item-top span {
+  flex: 1;
+  font-size: 0.78rem;
+  color: #d6e0f5;
+}
+
+.marks-values {
+  margin-top: 0.35rem;
+  display: grid;
+  gap: 0.15rem;
+  font-size: 0.72rem;
+  color: #9aafd4;
+}
+
 .stage-empty {
   padding: 4rem 2rem;
   text-align: center;
