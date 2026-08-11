@@ -2,10 +2,11 @@ import { useEffect, useId, useMemo, useRef } from 'react'
 import ReactECharts from 'echarts-for-react'
 import * as echarts from 'echarts'
 import type { EChartsType } from 'echarts'
-import type { ParsedLog } from '../lib/types'
+import type { CompareMark, ParsedLog } from '../lib/types'
 import {
   PANEL_HEIGHT,
   buildComparePanelOption,
+  buildCompareMarkExtras,
   COMPARE_COLOR_A,
   COMPARE_COLOR_B,
   formatElapsed,
@@ -24,6 +25,8 @@ type Props = {
   labelB: string
   offsetA: number
   offsetB: number
+  marks?: CompareMark[]
+  onToggleMark?: (time: number) => void
 }
 
 export function CompareCharts({
@@ -35,16 +38,23 @@ export function CompareCharts({
   labelB,
   offsetA,
   offsetB,
+  marks = [],
+  onToggleMark,
 }: Props) {
   const { t } = useI18n()
   const groupId = useId().replace(/:/g, '')
   const instances = useRef<EChartsType[]>([])
+  const clickCleanups = useRef<Array<() => void>>([])
   const params = useMemo(() => selected, [selected])
+  const onToggleRef = useRef(onToggleMark)
+  onToggleRef.current = onToggleMark
 
   useEffect(() => {
     if (instances.current.length > 0) echarts.connect(groupId)
     return () => {
       echarts.disconnect(groupId)
+      clickCleanups.current.forEach((fn) => fn())
+      clickCleanups.current = []
     }
   }, [groupId, params.length, visibility, offsetA, offsetB])
 
@@ -52,9 +62,44 @@ export function CompareCharts({
     return <div className="charts-empty">{t('params.emptyCommon')}</div>
   }
 
+  const attachClick = (chart: EChartsType) => {
+    const zr = chart.getZr()
+    let down: { x: number; y: number } | null = null
+
+    const onDown = (e: { offsetX: number; offsetY: number }) => {
+      down = { x: e.offsetX, y: e.offsetY }
+    }
+
+    const onUp = (e: { offsetX: number; offsetY: number }) => {
+      if (!down || !onToggleRef.current) {
+        down = null
+        return
+      }
+      const dx = Math.abs(e.offsetX - down.x)
+      const dy = Math.abs(e.offsetY - down.y)
+      down = null
+      if (dx > 6 || dy > 6) return
+      if (!chart.containPixel('grid', [e.offsetX, e.offsetY])) return
+      const point = chart.convertFromPixel({ seriesIndex: 0 }, [
+        e.offsetX,
+        e.offsetY,
+      ])
+      if (!point || point[0] === undefined || Number.isNaN(Number(point[0]))) return
+      onToggleRef.current(Number(point[0]))
+    }
+
+    zr.on('mousedown', onDown)
+    zr.on('mouseup', onUp)
+    clickCleanups.current.push(() => {
+      zr.off('mousedown', onDown)
+      zr.off('mouseup', onUp)
+    })
+  }
+
   const register = (idx: number, chart: EChartsType) => {
     chart.group = groupId
     instances.current[idx] = chart
+    attachClick(chart)
     if (instances.current.filter(Boolean).length === params.length) {
       echarts.connect(groupId)
     }
@@ -71,10 +116,15 @@ export function CompareCharts({
           labelB,
           offsetA,
           offsetB,
+          marks,
         })
         const height = isLast ? PANEL_HEIGHT + 36 : PANEL_HEIGHT
         return (
-          <div key={`${name}-${offsetA}-${offsetB}`} className="chart-panel" style={{ height }}>
+          <div
+            key={`${name}-${offsetA}-${offsetB}-${visibility}`}
+            className="chart-panel"
+            style={{ height }}
+          >
             <ReactECharts
               option={option}
               style={{ height: '100%', width: '100%' }}
@@ -98,6 +148,7 @@ export async function renderComparePanelsToDataUrls(
   offsetA: number,
   offsetB: number,
   panelsPerPage = 4,
+  marks: CompareMark[] = [],
 ): Promise<string[]> {
   if (selected.length === 0) return []
 
@@ -181,6 +232,16 @@ export async function renderComparePanelsToDataUrls(
     slice.forEach((name, i) => {
       const paramA = logA.parameters.find((p) => p.name === name)
       const paramB = logB.parameters.find((p) => p.name === name)
+      const extras = buildCompareMarkExtras(
+        marks,
+        name,
+        logA,
+        logB,
+        offsetA,
+        offsetB,
+        visibility,
+      )
+      let markHost = true
       if (visibility !== 'b' && paramA) {
         series.push({
           name: i === 0 ? 'A' : undefined,
@@ -192,7 +253,11 @@ export async function renderComparePanelsToDataUrls(
           data: toSeriesPoints(logA, paramA, offsetA),
           lineStyle: { width: 1.8, color: COMPARE_COLOR_A },
           itemStyle: { color: COMPARE_COLOR_A },
+          ...(markHost
+            ? { markLine: extras.markLine, markPoint: extras.markPoint }
+            : {}),
         })
+        markHost = false
       }
       if (visibility !== 'a' && paramB) {
         series.push({
@@ -209,6 +274,9 @@ export async function renderComparePanelsToDataUrls(
             type: visibility === 'both' ? 'dashed' : 'solid',
           },
           itemStyle: { color: COMPARE_COLOR_B },
+          ...(markHost
+            ? { markLine: extras.markLine, markPoint: extras.markPoint }
+            : {}),
         })
       }
     })

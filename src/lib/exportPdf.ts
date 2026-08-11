@@ -1,7 +1,13 @@
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import type { ChartMark, ParsedLog } from './types'
-import { formatSampleValue, markLabel, resolveParams } from './chartOption'
+import type { ChartMark, CompareMark, ParsedLog } from './types'
+import {
+  formatElapsed,
+  formatSampleValue,
+  markLabel,
+  resolveParams,
+  sampleAtAxisTime,
+} from './chartOption'
 
 type WorkshopInfo = {
   razonSocial: string
@@ -313,6 +319,8 @@ export async function exportComparePdfReport(
     offsetA: number
     offsetB: number
     visibility: string
+    marks?: CompareMark[]
+    selected?: string[]
   },
 ): Promise<void> {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
@@ -326,7 +334,18 @@ export async function exportComparePdfReport(
     '_',
   )
   const logoDataUrl = await loadTexaLogoDataUrl()
+  const marks = opts.marks ?? []
+  const selected = opts.selected ?? []
   let page = 1
+
+  const drawSignature = (y: number) => {
+    const sigY = Math.min(y, pageH - 48)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(9)
+    doc.setTextColor(33, 33, 33)
+    doc.text(t('pdf.sello'), pageW - margin - 120, sigY)
+    doc.text('_______________________________', pageW - margin - 160, sigY + 28)
+  }
 
   drawTexaLogo(doc, logoDataUrl, pageW, margin, 14, 40)
   doc.setFont('helvetica', 'bold')
@@ -427,6 +446,7 @@ export async function exportComparePdfReport(
   const chartW = pageW - margin * 2
   const maxChartHFirst = pageH - chartTopFirst - 70
   const maxChartHFull = pageH - margin - 50
+  let lastChartBottom = chartTopFirst
 
   chartPages.forEach((url, idx) => {
     if (idx > 0) {
@@ -453,20 +473,81 @@ export async function exportComparePdfReport(
     }
 
     doc.addImage(url, 'PNG', margin, top, drawW, drawH)
-
-    if (idx === chartPages.length - 1) {
-      const sigY = Math.min(top + drawH + 28, pageH - 48)
-      doc.setFont('helvetica', 'normal')
-      doc.setFontSize(9)
-      doc.setTextColor(33, 33, 33)
-      doc.text(t('pdf.sello'), pageW - margin - 120, sigY)
-      doc.text('_______________________________', pageW - margin - 160, sigY + 28)
-    }
-
+    lastChartBottom = top + drawH
     drawFooter(doc, label, page, margin)
   })
 
-  if (chartPages.length === 0) {
+  if (marks.length > 0) {
+    const head = [t('pdf.mark'), t('pdf.markTime')]
+    for (const name of selected) {
+      const unit =
+        logA.parameters.find((p) => p.name === name)?.unit ||
+        logB.parameters.find((p) => p.name === name)?.unit ||
+        ''
+      const labelParam = unit ? `${name} (${unit})` : name
+      if (opts.visibility !== 'b') head.push(`${labelParam} A`)
+      if (opts.visibility !== 'a') head.push(`${labelParam} B`)
+    }
+
+    const body = marks.map((m, i) => {
+      const row: string[] = [markLabel(i + 1), formatElapsed(m.time)]
+      for (const name of selected) {
+        if (opts.visibility !== 'b') {
+          row.push(
+            formatSampleValue(
+              sampleAtAxisTime(logA, name, m.time, opts.offsetA),
+            ),
+          )
+        }
+        if (opts.visibility !== 'a') {
+          row.push(
+            formatSampleValue(
+              sampleAtAxisTime(logB, name, m.time, opts.offsetB),
+            ),
+          )
+        }
+      }
+      return row
+    })
+
+    const needNewPage =
+      chartPages.length === 0 || lastChartBottom > pageH - 160 || marks.length > 4
+
+    if (needNewPage) {
+      doc.addPage()
+      page += 1
+      drawTexaLogo(doc, logoDataUrl, pageW, margin, 12, 32)
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(12)
+      doc.setTextColor(12, 37, 119)
+      doc.text(t('pdf.marksTitle'), pageW / 2, margin + 8, { align: 'center' })
+    }
+
+    const startY = needNewPage
+      ? margin + 28
+      : Math.min(lastChartBottom + 16, pageH - 140)
+
+    autoTable(doc, {
+      startY,
+      theme: 'grid',
+      styles: { fontSize: 6.5, cellPadding: 2, textColor: [40, 40, 40] },
+      headStyles: {
+        fillColor: [230, 81, 0],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+      },
+      head: [head],
+      body,
+      margin: { left: margin, right: margin },
+    })
+
+    const afterMarks = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable
+      .finalY
+    drawSignature(afterMarks + 28)
+    drawFooter(doc, label, page, margin)
+  } else if (chartPages.length > 0) {
+    drawSignature(lastChartBottom + 28)
+  } else {
     drawFooter(doc, label, page, margin)
   }
 

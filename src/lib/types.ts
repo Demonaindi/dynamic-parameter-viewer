@@ -20,6 +20,11 @@ export type ChartMark = {
   index: number
 }
 
+export type CompareMark = {
+  id: string
+  time: number
+}
+
 export const MARK_COLORS = [
   '#e65100',
   '#6a1b9a',

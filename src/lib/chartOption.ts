@@ -1,5 +1,5 @@
 import type { EChartsOption } from 'echarts'
-import type { ChartMark, LogParameter, ParsedLog } from './types'
+import type { ChartMark, CompareMark, LogParameter, ParsedLog } from './types'
 import { CHART_COLORS, MARK_COLORS } from './types'
 
 export const PANEL_HEIGHT = 210
@@ -330,6 +330,133 @@ export function buildPanelOption(
   }
 }
 
+export function nearestIndexAt(log: ParsedLog, localTime: number): number {
+  const times = log.timeSeconds
+  if (times.length === 0) return -1
+  let best = 0
+  let bestD = Infinity
+  for (let i = 0; i < times.length; i++) {
+    const d = Math.abs((times[i] ?? 0) - localTime)
+    if (d < bestD) {
+      bestD = d
+      best = i
+    }
+  }
+  return best
+}
+
+export function sampleAtAxisTime(
+  log: ParsedLog,
+  paramName: string,
+  axisTime: number,
+  offset: number,
+): number | null {
+  const idx = nearestIndexAt(log, axisTime - offset)
+  if (idx < 0) return null
+  const param = log.parameters.find((p) => p.name === paramName)
+  return param?.values[idx] ?? null
+}
+
+export function buildCompareMarkExtras(
+  marks: CompareMark[],
+  paramName: string,
+  logA: ParsedLog,
+  logB: ParsedLog,
+  offsetA: number,
+  offsetB: number,
+  visibility: CompareVisibility,
+) {
+  if (marks.length === 0) {
+    return { markLine: undefined, markPoint: undefined }
+  }
+
+  const markLine = {
+    silent: true,
+    symbol: ['none', 'none'] as [string, string],
+    animation: false,
+    data: marks.map((m, i) => {
+      const color = MARK_COLORS[i % MARK_COLORS.length]
+      const va =
+        visibility !== 'b'
+          ? sampleAtAxisTime(logA, paramName, m.time, offsetA)
+          : null
+      const vb =
+        visibility !== 'a'
+          ? sampleAtAxisTime(logB, paramName, m.time, offsetB)
+          : null
+      const parts = [`${markLabel(i + 1)} · ${formatElapsed(m.time)}`]
+      if (visibility !== 'b') parts.push(`A ${formatSampleValue(va)}`)
+      if (visibility !== 'a') parts.push(`B ${formatSampleValue(vb)}`)
+      return {
+        name: markLabel(i + 1),
+        xAxis: m.time,
+        label: {
+          show: true,
+          position: 'insideEndTop' as const,
+          formatter: parts.join('\n'),
+          color,
+          fontSize: 10,
+          fontWeight: 700 as const,
+          lineHeight: 13,
+        },
+        lineStyle: {
+          color,
+          type: 'dashed' as const,
+          width: 1.6,
+        },
+      }
+    }),
+  }
+
+  const markPointData: Array<{
+    name: string
+    coord: [number, number]
+    itemStyle: { color: string; borderColor: string; borderWidth: number }
+    label: { show: boolean }
+  }> = []
+
+  marks.forEach((m, i) => {
+    const color = MARK_COLORS[i % MARK_COLORS.length]
+    if (visibility !== 'b') {
+      const va = sampleAtAxisTime(logA, paramName, m.time, offsetA)
+      if (va !== null) {
+        markPointData.push({
+          name: `${markLabel(i + 1)}A`,
+          coord: [m.time, va],
+          itemStyle: { color: COMPARE_COLOR_A, borderColor: '#fff', borderWidth: 1.5 },
+          label: { show: false },
+        })
+      }
+    }
+    if (visibility !== 'a') {
+      const vb = sampleAtAxisTime(logB, paramName, m.time, offsetB)
+      if (vb !== null) {
+        markPointData.push({
+          name: `${markLabel(i + 1)}B`,
+          coord: [m.time, vb],
+          itemStyle: {
+            color: visibility === 'both' ? color : COMPARE_COLOR_B,
+            borderColor: '#fff',
+            borderWidth: 1.5,
+          },
+          label: { show: false },
+        })
+      }
+    }
+  })
+
+  return {
+    markLine,
+    markPoint: {
+      silent: true,
+      animation: false,
+      symbol: 'circle',
+      symbolSize: 8,
+      data: markPointData,
+    },
+  }
+}
+
 export type CompareVisibility = 'both' | 'a' | 'b'
 
 export function buildComparePanelOption(
@@ -344,14 +471,25 @@ export function buildComparePanelOption(
     labelB: string
     offsetA?: number
     offsetB?: number
+    marks?: CompareMark[]
   },
 ): EChartsOption {
   const offsetA = opts.offsetA ?? 0
   const offsetB = opts.offsetB ?? 0
+  const marks = opts.marks ?? []
   const paramA = logA.parameters.find((p) => p.name === paramName)
   const paramB = logB.parameters.find((p) => p.name === paramName)
   const unit = paramA?.unit || paramB?.unit || ''
   const title = unit ? `${paramName} (${unit})` : paramName
+  const extras = buildCompareMarkExtras(
+    marks,
+    paramName,
+    logA,
+    logB,
+    offsetA,
+    offsetB,
+    visibility,
+  )
 
   const values: (number | null)[] = []
   if (visibility !== 'b' && paramA) values.push(...paramA.values)
@@ -359,6 +497,7 @@ export function buildComparePanelOption(
   const { min, max } = yRange(values)
 
   const series = []
+  let markHost = true
   if (visibility !== 'b' && paramA) {
     series.push({
       name: opts.labelA,
@@ -385,7 +524,11 @@ export function buildComparePanelOption(
               },
             }
           : undefined,
+      ...(markHost
+        ? { markLine: extras.markLine, markPoint: extras.markPoint }
+        : {}),
     })
+    markHost = false
   }
   if (visibility !== 'a' && paramB) {
     series.push({
@@ -417,6 +560,9 @@ export function buildComparePanelOption(
               },
             }
           : undefined,
+      ...(markHost
+        ? { markLine: extras.markLine, markPoint: extras.markPoint }
+        : {}),
     })
   }
 

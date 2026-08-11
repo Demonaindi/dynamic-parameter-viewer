@@ -22,7 +22,7 @@ import {
   suggestAlignParams,
   type CompareVisibility,
 } from './lib/chartOption'
-import type { ChartMark, ParsedLog } from './lib/types'
+import type { ChartMark, CompareMark, ParsedLog } from './lib/types'
 import { useI18n } from './i18n/I18nContext'
 import './App.css'
 
@@ -60,6 +60,7 @@ export default function App() {
   const [offsetA, setOffsetA] = useState(0)
   const [offsetB, setOffsetB] = useState(0)
   const [alignParam, setAlignParam] = useState('')
+  const [compareMarks, setCompareMarks] = useState<CompareMark[]>([])
 
   const commonNames = useMemo(() => {
     if (!logA || !logB) return []
@@ -72,6 +73,7 @@ export default function App() {
       setOffsetA(0)
       setOffsetB(0)
       setAlignParam('')
+      setCompareMarks([])
       return
     }
     const names = commonParamNames(logA, logB)
@@ -80,6 +82,7 @@ export default function App() {
     setAlignParam(suggested[0] || '')
     setOffsetA(0)
     setOffsetB(0)
+    setCompareMarks([])
   }, [logA, logB])
 
   const shiftRange = useMemo(() => {
@@ -123,6 +126,15 @@ export default function App() {
       const existing = prev.find((m) => m.index === index)
       if (existing) return prev.filter((m) => m.id !== existing.id)
       return [...prev, { id: `m-${index}-${Date.now()}`, index }]
+    })
+  }, [])
+
+  const toggleCompareMark = useCallback((time: number) => {
+    setCompareMarks((prev) => {
+      const tol = 0.35
+      const existing = prev.find((m) => Math.abs(m.time - time) <= tol)
+      if (existing) return prev.filter((m) => m.id !== existing.id)
+      return [...prev, { id: `cm-${Date.now()}`, time: Number(time.toFixed(2)) }]
     })
   }, [])
 
@@ -174,6 +186,7 @@ export default function App() {
           offsetA,
           offsetB,
           PDF_PANELS_PER_PAGE,
+          compareMarks,
         )
         await exportComparePdfReport(logA, logB, pages, data, t, {
           labelA,
@@ -181,6 +194,8 @@ export default function App() {
           offsetA,
           offsetB,
           visibility,
+          marks: compareMarks,
+          selected: compareSelected,
         })
       }
       setExportKind(null)
@@ -408,6 +423,20 @@ export default function App() {
                     setOffsetB(aligned.offsetB)
                   }}
                 />
+                <MarksPanel
+                  mode="compare"
+                  logA={logA}
+                  logB={logB}
+                  selected={compareSelected}
+                  marks={compareMarks}
+                  offsetA={offsetA}
+                  offsetB={offsetB}
+                  visibility={visibility}
+                  onRemove={(id) =>
+                    setCompareMarks((prev) => prev.filter((m) => m.id !== id))
+                  }
+                  onClear={() => setCompareMarks([])}
+                />
               </>
             ) : (
               <div className="hint">{t('hint.compare')}</div>
@@ -428,7 +457,11 @@ export default function App() {
                     {offsetA !== 0 || offsetB !== 0
                       ? ` · ΔA ${offsetA >= 0 ? '+' : ''}${offsetA.toFixed(1)}s · ΔB ${offsetB >= 0 ? '+' : ''}${offsetB.toFixed(1)}s`
                       : ''}
+                    {compareMarks.length > 0
+                      ? ` · ${t('marks.count', { n: compareMarks.length })}`
+                      : ''}
                   </span>
+                  <em className="marks-hint">{t('marks.hint')}</em>
                 </div>
                 <CompareCharts
                   logA={logA}
@@ -439,6 +472,8 @@ export default function App() {
                   labelB="B"
                   offsetA={offsetA}
                   offsetB={offsetB}
+                  marks={compareMarks}
+                  onToggleMark={toggleCompareMark}
                 />
               </>
             ) : (
