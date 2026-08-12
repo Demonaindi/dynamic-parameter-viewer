@@ -53,17 +53,17 @@ function ShiftRow({
         onChange={(e) => onChange(Number(e.target.value))}
       />
       <div className="shift-nudge">
+        <button type="button" className="btn ghost" onClick={() => step(-0.1)}>
+          −0.1s
+        </button>
         <button type="button" className="btn ghost" onClick={() => step(-1)}>
           −1s
         </button>
-        <button type="button" className="btn ghost" onClick={() => step(-0.5)}>
-          −0.5s
-        </button>
-        <button type="button" className="btn ghost" onClick={() => step(0.5)}>
-          +0.5s
-        </button>
         <button type="button" className="btn ghost" onClick={() => step(1)}>
           +1s
+        </button>
+        <button type="button" className="btn ghost" onClick={() => step(0.1)}>
+          +0.1s
         </button>
       </div>
     </div>

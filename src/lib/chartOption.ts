@@ -4,6 +4,82 @@ import { CHART_COLORS, MARK_COLORS } from './types'
 
 export const PANEL_HEIGHT = 210
 export const PDF_PANELS_PER_PAGE = 4
+export const PDF_MARK_PARAMS_PER_TABLE = 4
+export const PDF_MARK_PARAMS_PER_TABLE_COMPARE = 2
+
+export type ZoomRange = { start: number; end: number }
+
+export type ExportWindow = {
+  startPercent: number
+  endPercent: number
+}
+
+export function clampExportWindow(win: ExportWindow): ExportWindow {
+  let start = Math.max(0, Math.min(99.9, win.startPercent))
+  let end = Math.max(0.1, Math.min(100, win.endPercent))
+  if (end <= start) end = Math.min(100, start + 0.5)
+  return {
+    startPercent: Number(start.toFixed(1)),
+    endPercent: Number(end.toFixed(1)),
+  }
+}
+
+export function indicesFromPercent(
+  length: number,
+  startPct: number,
+  endPct: number,
+): { start: number; end: number } {
+  if (length <= 0) return { start: 0, end: 0 }
+  if (length === 1) return { start: 0, end: 0 }
+  const start = Math.max(
+    0,
+    Math.min(length - 1, Math.floor((startPct / 100) * (length - 1))),
+  )
+  const end = Math.max(
+    start,
+    Math.min(length - 1, Math.ceil((endPct / 100) * (length - 1))),
+  )
+  return { start, end }
+}
+
+export function labelAtIndex(log: ParsedLog, index: number): string {
+  const det = log.detectionTimes[index]
+  if (det && det.trim()) return det
+  return log.timeLabels[index] ?? '—'
+}
+
+export function shiftZoomRange(
+  zoom: ZoomRange,
+  direction: -1 | 1,
+  fraction = 0.2,
+): ZoomRange {
+  const span = Math.max(1, zoom.end - zoom.start)
+  let start = zoom.start + direction * span * fraction
+  let end = zoom.end + direction * span * fraction
+  if (start < 0) {
+    end -= start
+    start = 0
+  }
+  if (end > 100) {
+    start -= end - 100
+    end = 100
+  }
+  start = Math.max(0, start)
+  end = Math.min(100, end)
+  if (end - start < 1) {
+    if (direction < 0) {
+      start = 0
+      end = Math.min(100, span)
+    } else {
+      end = 100
+      start = Math.max(0, 100 - span)
+    }
+  }
+  return {
+    start: Number(start.toFixed(2)),
+    end: Number(end.toFixed(2)),
+  }
+}
 
 export const COMPARE_COLOR_A = '#0c2577'
 export const COMPARE_COLOR_B = '#c62828'
@@ -186,36 +262,87 @@ export function buildSeriesMarkExtras(
   return { markLine, markPoint }
 }
 
-export function buildPanelOption(
+const STACK_TITLE_H = 34
+const STACK_GAP = 12
+const STACK_LEFT = 22
+const STACK_RIGHT = 62
+export const STACK_AXIS_AREA = 62
+
+export function stackedChartHeight(panelCount: number): number {
+  return Math.max(1, panelCount) * PANEL_HEIGHT + STACK_AXIS_AREA
+}
+
+function stackedGrids(count: number) {
+  return Array.from({ length: count }, (_, i) => ({
+    left: STACK_LEFT,
+    right: STACK_RIGHT,
+    top: i * PANEL_HEIGHT + STACK_TITLE_H,
+    height: PANEL_HEIGHT - STACK_TITLE_H - STACK_GAP,
+    containLabel: false,
+  }))
+}
+
+function valueAxisLabel() {
+  return {
+    color: '#546e7a',
+    fontSize: 11,
+    formatter: (v: number) => {
+      const abs = Math.abs(v)
+      if (abs >= 1000) return v.toFixed(0)
+      if (abs >= 10) return v.toFixed(1)
+      return v.toFixed(2)
+    },
+  }
+}
+
+function stackedDataZoom(count: number, sliderLabel?: (v: number) => string) {
+  const xAxisIndex = Array.from({ length: count }, (_, i) => i)
+  return [
+    {
+      type: 'inside' as const,
+      xAxisIndex,
+      filterMode: 'none' as const,
+      zoomOnMouseWheel: true,
+      moveOnMouseMove: true,
+      moveOnMouseWheel: true,
+      preventDefaultMouseMove: true,
+      throttle: 0,
+      start: 0,
+      end: 100,
+    },
+    {
+      type: 'slider' as const,
+      xAxisIndex,
+      filterMode: 'none' as const,
+      height: 18,
+      bottom: 8,
+      left: STACK_LEFT,
+      right: STACK_RIGHT,
+      borderColor: '#cfd8dc',
+      fillerColor: 'rgba(12, 37, 119, 0.18)',
+      handleStyle: { color: '#0c2577' },
+      textStyle: { color: '#607d8b', fontSize: 10 },
+      brushSelect: false,
+      realtime: true,
+      throttle: 0,
+      ...(sliderLabel ? { labelFormatter: sliderLabel } : {}),
+      start: 0,
+      end: 100,
+    },
+  ]
+}
+
+export function buildStackedOption(
   log: ParsedLog,
-  param: LogParameter,
-  colorIndex: number,
-  opts: {
-    showXAxis: boolean
-    showSlider: boolean
-    marks?: ChartMark[]
-  },
+  params: LogParameter[],
+  marks: ChartMark[] = [],
 ): EChartsOption {
-  const color = CHART_COLORS[colorIndex % CHART_COLORS.length]
-  const { min, max } = yRange(param.values)
-  const label = paramLabel(param)
-  const marks = opts.marks ?? []
-  const { markLine, markPoint } = buildSeriesMarkExtras(log, param, marks)
+  const count = params.length
+  const last = count - 1
 
   return {
     animation: false,
     backgroundColor: '#fff',
-    title: {
-      text: label,
-      left: 8,
-      top: 6,
-      textStyle: {
-        fontSize: 13,
-        fontWeight: 600,
-        color,
-        fontFamily: 'Segoe UI, Tahoma, Arial, sans-serif',
-      },
-    },
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'line' },
@@ -227,68 +354,72 @@ export function buildPanelOption(
           ? '—'
           : String(v),
     },
-    axisPointer: {
-      link: [{ xAxisIndex: 'all' }],
-    },
-    grid: {
-      left: 18,
-      right: 58,
-      top: 36,
-      bottom: opts.showSlider ? 52 : opts.showXAxis ? 28 : 12,
-      containLabel: false,
-    },
-    xAxis: {
-      type: 'category',
+    axisPointer: { snap: true },
+    title: params.map((p, i) => ({
+      text: paramLabel(p),
+      left: STACK_LEFT,
+      top: i * PANEL_HEIGHT + 10,
+      textStyle: {
+        fontSize: 13,
+        fontWeight: 600 as const,
+        color: CHART_COLORS[i % CHART_COLORS.length],
+        fontFamily: 'Segoe UI, Tahoma, Arial, sans-serif',
+      },
+    })),
+    grid: stackedGrids(count),
+    xAxis: params.map((_, i) => ({
+      type: 'category' as const,
+      gridIndex: i,
       data: log.timeLabels,
       boundaryGap: false,
       axisLabel: {
-        show: opts.showXAxis || opts.showSlider,
+        show: i === last,
         color: '#546e7a',
         fontSize: 11,
         hideOverlap: true,
       },
-      axisTick: { show: opts.showXAxis },
+      axisTick: { show: i === last },
       axisLine: { lineStyle: { color: '#cfd8dc' } },
-      splitLine: {
-        show: true,
-        lineStyle: { color: '#eef2f4' },
-      },
-    },
-    yAxis: {
-      type: 'value',
-      position: 'right',
-      min,
-      max,
-      scale: true,
-      axisLabel: {
-        color: '#546e7a',
-        fontSize: 11,
-        formatter: (v: number) => {
-          const abs = Math.abs(v)
-          if (abs >= 1000) return v.toFixed(0)
-          if (abs >= 10) return v.toFixed(1)
-          return v.toFixed(2)
+      splitLine: { show: true, lineStyle: { color: '#eef2f4' } },
+    })),
+    yAxis: params.map((p, i) => {
+      const { min, max } = yRange(p.values)
+      return {
+        type: 'value' as const,
+        gridIndex: i,
+        position: 'right' as const,
+        min,
+        max,
+        scale: true,
+        axisLabel: valueAxisLabel(),
+        axisLine: { show: false },
+        splitLine: { lineStyle: { color: '#eef2f4' } },
+        name: p.unit || '',
+        nameLocation: 'end' as const,
+        nameGap: 8,
+        nameTextStyle: {
+          color: '#78909c',
+          fontSize: 10,
+          align: 'right' as const,
         },
-      },
-      axisLine: { show: false },
-      splitLine: { lineStyle: { color: '#eef2f4' } },
-      name: param.unit || '',
-      nameLocation: 'end',
-      nameGap: 8,
-      nameTextStyle: { color: '#78909c', fontSize: 10, align: 'right' },
-    },
-    series: [
-      {
-        name: label,
-        type: 'line',
+      }
+    }),
+    series: params.map((p, i) => {
+      const color = CHART_COLORS[i % CHART_COLORS.length]
+      const { markLine, markPoint } = buildSeriesMarkExtras(log, p, marks)
+      return {
+        name: paramLabel(p),
+        type: 'line' as const,
         showSymbol: false,
-        sampling: 'lttb',
-        data: param.values,
+        sampling: 'lttb' as const,
+        xAxisIndex: i,
+        yAxisIndex: i,
+        data: p.values,
         lineStyle: { width: 1.8, color },
         itemStyle: { color },
         areaStyle: {
           color: {
-            type: 'linear',
+            type: 'linear' as const,
             x: 0,
             y: 0,
             x2: 0,
@@ -301,32 +432,9 @@ export function buildPanelOption(
         },
         markLine,
         markPoint,
-      },
-    ],
-    dataZoom: [
-      {
-        type: 'inside',
-        xAxisIndex: 0,
-        filterMode: 'none',
-        zoomOnMouseWheel: true,
-        moveOnMouseMove: true,
-      },
-      ...(opts.showSlider
-        ? [
-            {
-              type: 'slider' as const,
-              xAxisIndex: 0,
-              height: 18,
-              bottom: 6,
-              borderColor: '#cfd8dc',
-              fillerColor: 'rgba(12, 37, 119, 0.18)',
-              handleStyle: { color: '#0c2577' },
-              textStyle: { color: '#607d8b', fontSize: 10 },
-              brushSelect: false,
-            },
-          ]
-        : []),
-    ],
+      }
+    }),
+    dataZoom: stackedDataZoom(count),
   }
 }
 
@@ -459,14 +567,19 @@ export function buildCompareMarkExtras(
 
 export type CompareVisibility = 'both' | 'a' | 'b'
 
-export function buildComparePanelOption(
+type CompareTipItem = {
+  axisValue?: number | string
+  marker?: string
+  seriesName?: string
+  value?: unknown
+}
+
+export function buildCompareStackedOption(
   logA: ParsedLog,
   logB: ParsedLog,
-  paramName: string,
+  names: string[],
   visibility: CompareVisibility,
   opts: {
-    showXAxis: boolean
-    showSlider: boolean
     labelA: string
     labelB: string
     offsetA?: number
@@ -477,113 +590,111 @@ export function buildComparePanelOption(
   const offsetA = opts.offsetA ?? 0
   const offsetB = opts.offsetB ?? 0
   const marks = opts.marks ?? []
-  const paramA = logA.parameters.find((p) => p.name === paramName)
-  const paramB = logB.parameters.find((p) => p.name === paramName)
-  const unit = paramA?.unit || paramB?.unit || ''
-  const title = unit ? `${paramName} (${unit})` : paramName
-  const extras = buildCompareMarkExtras(
-    marks,
-    paramName,
-    logA,
-    logB,
-    offsetA,
-    offsetB,
-    visibility,
-  )
+  const count = names.length
+  const last = count - 1
 
-  const values: (number | null)[] = []
-  if (visibility !== 'b' && paramA) values.push(...paramA.values)
-  if (visibility !== 'a' && paramB) values.push(...paramB.values)
-  const { min, max } = yRange(values)
+  const series: Record<string, unknown>[] = []
+  names.forEach((name, i) => {
+    const paramA = logA.parameters.find((p) => p.name === name)
+    const paramB = logB.parameters.find((p) => p.name === name)
+    const extras = buildCompareMarkExtras(
+      marks,
+      name,
+      logA,
+      logB,
+      offsetA,
+      offsetB,
+      visibility,
+    )
+    let markHost = true
 
-  const series = []
-  let markHost = true
-  if (visibility !== 'b' && paramA) {
-    series.push({
-      name: opts.labelA,
-      type: 'line' as const,
-      showSymbol: false,
-      sampling: 'lttb' as const,
-      data: toSeriesPoints(logA, paramA, offsetA),
-      z: 1,
-      lineStyle: { width: 2, color: COMPARE_COLOR_A },
-      itemStyle: { color: COMPARE_COLOR_A },
-      areaStyle:
-        visibility === 'a'
+    if (visibility !== 'b' && paramA) {
+      series.push({
+        name: opts.labelA,
+        type: 'line',
+        showSymbol: false,
+        sampling: 'lttb',
+        xAxisIndex: i,
+        yAxisIndex: i,
+        data: toSeriesPoints(logA, paramA, offsetA),
+        z: 1,
+        lineStyle: { width: 2, color: COMPARE_COLOR_A },
+        itemStyle: { color: COMPARE_COLOR_A },
+        ...(visibility === 'a'
           ? {
-              color: {
-                type: 'linear' as const,
-                x: 0,
-                y: 0,
-                x2: 0,
-                y2: 1,
-                colorStops: [
-                  { offset: 0, color: `${COMPARE_COLOR_A}33` },
-                  { offset: 1, color: `${COMPARE_COLOR_A}05` },
-                ],
+              areaStyle: {
+                color: {
+                  type: 'linear',
+                  x: 0,
+                  y: 0,
+                  x2: 0,
+                  y2: 1,
+                  colorStops: [
+                    { offset: 0, color: `${COMPARE_COLOR_A}33` },
+                    { offset: 1, color: `${COMPARE_COLOR_A}05` },
+                  ],
+                },
               },
             }
-          : undefined,
-      ...(markHost
-        ? { markLine: extras.markLine, markPoint: extras.markPoint }
-        : {}),
-    })
-    markHost = false
-  }
-  if (visibility !== 'a' && paramB) {
-    series.push({
-      name: opts.labelB,
-      type: 'line' as const,
-      showSymbol: false,
-      sampling: 'lttb' as const,
-      data: toSeriesPoints(logB, paramB, offsetB),
-      z: 2,
-      lineStyle: {
-        width: 2,
-        color: COMPARE_COLOR_B,
-        type: visibility === 'both' ? ('dashed' as const) : ('solid' as const),
-      },
-      itemStyle: { color: COMPARE_COLOR_B },
-      areaStyle:
-        visibility === 'b'
+          : {}),
+        ...(markHost
+          ? { markLine: extras.markLine, markPoint: extras.markPoint }
+          : {}),
+      })
+      markHost = false
+    }
+
+    if (visibility !== 'a' && paramB) {
+      series.push({
+        name: opts.labelB,
+        type: 'line',
+        showSymbol: false,
+        sampling: 'lttb',
+        xAxisIndex: i,
+        yAxisIndex: i,
+        data: toSeriesPoints(logB, paramB, offsetB),
+        z: 2,
+        lineStyle: {
+          width: 2,
+          color: COMPARE_COLOR_B,
+          type: visibility === 'both' ? 'dashed' : 'solid',
+        },
+        itemStyle: { color: COMPARE_COLOR_B },
+        ...(visibility === 'b'
           ? {
-              color: {
-                type: 'linear' as const,
-                x: 0,
-                y: 0,
-                x2: 0,
-                y2: 1,
-                colorStops: [
-                  { offset: 0, color: `${COMPARE_COLOR_B}33` },
-                  { offset: 1, color: `${COMPARE_COLOR_B}05` },
-                ],
+              areaStyle: {
+                color: {
+                  type: 'linear',
+                  x: 0,
+                  y: 0,
+                  x2: 0,
+                  y2: 1,
+                  colorStops: [
+                    { offset: 0, color: `${COMPARE_COLOR_B}33` },
+                    { offset: 1, color: `${COMPARE_COLOR_B}05` },
+                  ],
+                },
               },
             }
-          : undefined,
-      ...(markHost
-        ? { markLine: extras.markLine, markPoint: extras.markPoint }
-        : {}),
-    })
-  }
+          : {}),
+        ...(markHost
+          ? { markLine: extras.markLine, markPoint: extras.markPoint }
+          : {}),
+      })
+    }
+  })
 
   return {
     animation: false,
     backgroundColor: '#fff',
-    title: {
-      text: title,
-      left: 8,
-      top: 6,
-      textStyle: {
-        fontSize: 13,
-        fontWeight: 600,
-        color: '#0c2577',
-        fontFamily: 'Segoe UI, Tahoma, Arial, sans-serif',
-      },
-    },
     legend: {
       show: true,
-      top: 4,
-      right: 70,
+      top: 6,
+      right: STACK_RIGHT + 8,
+      data: [
+        ...(visibility !== 'b' ? [opts.labelA] : []),
+        ...(visibility !== 'a' ? [opts.labelB] : []),
+      ],
       textStyle: { fontSize: 11, color: '#546e7a' },
     },
     tooltip: {
@@ -592,77 +703,85 @@ export function buildComparePanelOption(
       backgroundColor: 'rgba(255,255,255,0.96)',
       borderColor: '#cfd8dc',
       textStyle: { color: '#263238', fontSize: 12 },
+      formatter: (params: unknown) => {
+        const list = Array.isArray(params) ? params : [params]
+        if (list.length === 0) return ''
+        const head = formatElapsed(Number((list[0] as CompareTipItem).axisValue))
+        const rows = list.map((raw) => {
+          const item = raw as CompareTipItem
+          const value = Array.isArray(item.value) ? item.value[1] : item.value
+          const shown = formatSampleValue(
+            typeof value === 'number' ? value : null,
+          )
+          return `${item.marker ?? ''}${item.seriesName ?? ''}&nbsp;<b>${shown}</b>`
+        })
+        return [`<b>${head}</b>`, ...rows].join('<br/>')
+      },
     },
-    grid: {
-      left: 18,
-      right: 58,
-      top: 40,
-      bottom: opts.showSlider ? 52 : opts.showXAxis ? 28 : 12,
-      containLabel: false,
-    },
-    xAxis: {
-      type: 'value',
-      min: 'dataMin',
-      max: 'dataMax',
+    axisPointer: { snap: false },
+    title: names.map((name, i) => {
+      const unit =
+        logA.parameters.find((p) => p.name === name)?.unit ||
+        logB.parameters.find((p) => p.name === name)?.unit ||
+        ''
+      return {
+        text: unit ? `${name} (${unit})` : name,
+        left: STACK_LEFT,
+        top: i * PANEL_HEIGHT + 10,
+        textStyle: {
+          fontSize: 13,
+          fontWeight: 600 as const,
+          color: '#0c2577',
+          fontFamily: 'Segoe UI, Tahoma, Arial, sans-serif',
+        },
+      }
+    }),
+    grid: stackedGrids(count),
+    xAxis: names.map((_, i) => ({
+      type: 'value' as const,
+      gridIndex: i,
+      min: 'dataMin' as const,
+      max: 'dataMax' as const,
       axisLabel: {
-        show: opts.showXAxis || opts.showSlider,
+        show: i === last,
         color: '#546e7a',
         fontSize: 11,
         formatter: (v: number) => formatElapsed(v),
       },
-      axisTick: { show: opts.showXAxis },
+      axisTick: { show: i === last },
       axisLine: { lineStyle: { color: '#cfd8dc' } },
       splitLine: { show: true, lineStyle: { color: '#eef2f4' } },
-    },
-    yAxis: {
-      type: 'value',
-      position: 'right',
-      min,
-      max,
-      scale: true,
-      axisLabel: {
-        color: '#546e7a',
-        fontSize: 11,
-        formatter: (v: number) => {
-          const abs = Math.abs(v)
-          if (abs >= 1000) return v.toFixed(0)
-          if (abs >= 10) return v.toFixed(1)
-          return v.toFixed(2)
+    })),
+    yAxis: names.map((name, i) => {
+      const paramA = logA.parameters.find((p) => p.name === name)
+      const paramB = logB.parameters.find((p) => p.name === name)
+      const unit = paramA?.unit || paramB?.unit || ''
+      const values: (number | null)[] = []
+      if (visibility !== 'b' && paramA) values.push(...paramA.values)
+      if (visibility !== 'a' && paramB) values.push(...paramB.values)
+      const { min, max } = yRange(values)
+      return {
+        type: 'value' as const,
+        gridIndex: i,
+        position: 'right' as const,
+        min,
+        max,
+        scale: true,
+        axisLabel: valueAxisLabel(),
+        axisLine: { show: false },
+        splitLine: { lineStyle: { color: '#eef2f4' } },
+        name: unit,
+        nameLocation: 'end' as const,
+        nameGap: 8,
+        nameTextStyle: {
+          color: '#78909c',
+          fontSize: 10,
+          align: 'right' as const,
         },
-      },
-      axisLine: { show: false },
-      splitLine: { lineStyle: { color: '#eef2f4' } },
-      name: unit,
-      nameLocation: 'end',
-      nameGap: 8,
-      nameTextStyle: { color: '#78909c', fontSize: 10, align: 'right' },
-    },
-    series,
-    dataZoom: [
-      {
-        type: 'inside',
-        xAxisIndex: 0,
-        filterMode: 'none',
-        zoomOnMouseWheel: true,
-        moveOnMouseMove: true,
-      },
-      ...(opts.showSlider
-        ? [
-            {
-              type: 'slider' as const,
-              xAxisIndex: 0,
-              height: 18,
-              bottom: 6,
-              borderColor: '#cfd8dc',
-              fillerColor: 'rgba(12, 37, 119, 0.18)',
-              handleStyle: { color: '#0c2577' },
-              textStyle: { color: '#607d8b', fontSize: 10 },
-              brushSelect: false,
-              labelFormatter: (v: number) => formatElapsed(v),
-            },
-          ]
-        : []),
-    ],
+      }
+    }),
+    series: series as EChartsOption['series'],
+    dataZoom: stackedDataZoom(count, (v: number) => formatElapsed(v)),
   }
 }
 

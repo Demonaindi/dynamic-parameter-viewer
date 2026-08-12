@@ -2,6 +2,9 @@ import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import type { ChartMark, CompareMark, ParsedLog } from './types'
 import {
+  PDF_MARK_PARAMS_PER_TABLE,
+  PDF_MARK_PARAMS_PER_TABLE_COMPARE,
+  chunkParams,
   formatElapsed,
   formatSampleValue,
   markLabel,
@@ -82,6 +85,8 @@ export async function exportPdfReport(
   opts?: {
     marks?: ChartMark[]
     selected?: string[]
+    inicioOverride?: string
+    finOverride?: string
   },
 ): Promise<void> {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
@@ -92,6 +97,8 @@ export async function exportPdfReport(
   const logoDataUrl = await loadTexaLogoDataUrl()
   const marks = opts?.marks ?? []
   const selected = opts?.selected ?? []
+  const inicio = opts?.inicioOverride || get(log.meta, 'INICIO VIAJE')
+  const fin = opts?.finOverride || get(log.meta, 'FIN VIAJE')
   let page = 1
 
   const drawSignature = (y: number) => {
@@ -194,9 +201,9 @@ export async function exportPdfReport(
     body: [
       [
         t('pdf.inicio'),
-        get(meta, 'INICIO VIAJE'),
+        inicio || '—',
         t('pdf.fin'),
-        get(meta, 'FIN VIAJE'),
+        fin || '—',
       ],
     ],
     columnStyles: {
@@ -252,16 +259,7 @@ export async function exportPdfReport(
 
   if (marks.length > 0) {
     const params = resolveParams(log, selected)
-    const head = [
-      t('pdf.mark'),
-      t('pdf.markTime'),
-      ...params.map((p) => (p.unit ? `${p.name} (${p.unit})` : p.name)),
-    ]
-    const body = marks.map((m, i) => [
-      markLabel(i + 1),
-      log.timeLabels[m.index] ?? '—',
-      ...params.map((p) => formatSampleValue(p.values[m.index])),
-    ])
+    const chunks = chunkParams(params, PDF_MARK_PARAMS_PER_TABLE)
 
     const needNewPage =
       chartPages.length === 0 || lastChartBottom > pageH - 160 || marks.length > 4
@@ -276,22 +274,55 @@ export async function exportPdfReport(
       doc.text(t('pdf.marksTitle'), pageW / 2, margin + 8, { align: 'center' })
     }
 
-    const startY = needNewPage
+    let startY = needNewPage
       ? margin + 28
       : Math.min(lastChartBottom + 16, pageH - 140)
 
-    autoTable(doc, {
-      startY,
-      theme: 'grid',
-      styles: { fontSize: 7, cellPadding: 2.5, textColor: [40, 40, 40] },
-      headStyles: {
-        fillColor: [230, 81, 0],
-        textColor: [255, 255, 255],
-        fontStyle: 'bold',
-      },
-      head: [head],
-      body,
-      margin: { left: margin, right: margin },
+    chunks.forEach((chunk, chunkIdx) => {
+      if (chunkIdx > 0) {
+        const prevY = (doc as jsPDF & { lastAutoTable: { finalY: number } })
+          .lastAutoTable.finalY
+        if (prevY > pageH - 140) {
+          drawFooter(doc, label, page, margin)
+          doc.addPage()
+          page += 1
+          drawTexaLogo(doc, logoDataUrl, pageW, margin, 12, 32)
+          doc.setFont('helvetica', 'bold')
+          doc.setFontSize(12)
+          doc.setTextColor(12, 37, 119)
+          doc.text(t('pdf.marksTitleCont'), pageW / 2, margin + 8, {
+            align: 'center',
+          })
+          startY = margin + 28
+        } else {
+          startY = prevY + 14
+        }
+      }
+
+      const head = [
+        t('pdf.mark'),
+        t('pdf.markTime'),
+        ...chunk.map((p) => (p.unit ? `${p.name} (${p.unit})` : p.name)),
+      ]
+      const body = marks.map((m, i) => [
+        markLabel(i + 1),
+        log.timeLabels[m.index] ?? '—',
+        ...chunk.map((p) => formatSampleValue(p.values[m.index])),
+      ])
+
+      autoTable(doc, {
+        startY,
+        theme: 'grid',
+        styles: { fontSize: 7, cellPadding: 2.5, textColor: [40, 40, 40] },
+        headStyles: {
+          fillColor: [230, 81, 0],
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+        },
+        head: [head],
+        body,
+        margin: { left: margin, right: margin },
+      })
     })
 
     const afterMarks = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable
@@ -321,6 +352,8 @@ export async function exportComparePdfReport(
     visibility: string
     marks?: CompareMark[]
     selected?: string[]
+    inicioOverride?: string
+    finOverride?: string
   },
 ): Promise<void> {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' })
@@ -336,6 +369,8 @@ export async function exportComparePdfReport(
   const logoDataUrl = await loadTexaLogoDataUrl()
   const marks = opts.marks ?? []
   const selected = opts.selected ?? []
+  const inicio = opts.inicioOverride || get(logA.meta, 'INICIO VIAJE') || '—'
+  const fin = opts.finOverride || get(logA.meta, 'FIN VIAJE') || '—'
   let page = 1
 
   const drawSignature = (y: number) => {
@@ -404,19 +439,19 @@ export async function exportComparePdfReport(
     },
     head: [[{ content: t('pdf.compareLogs'), colSpan: 4 }]],
     body: [
-      ['A', opts.labelA, t('pdf.inicio'), get(logA.meta, 'INICIO VIAJE') || '—'],
+      ['A', opts.labelA, t('pdf.inicio'), inicio],
       [
         '',
         `${get(logA.meta, 'MARCA')} ${get(logA.meta, 'MODELO')}`.trim() || logA.sourceName,
         t('pdf.fin'),
-        get(logA.meta, 'FIN VIAJE') || '—',
+        fin,
       ],
-      ['B', opts.labelB, t('pdf.inicio'), get(logB.meta, 'INICIO VIAJE') || '—'],
+      ['B', opts.labelB, t('pdf.inicio'), opts.inicioOverride || get(logB.meta, 'INICIO VIAJE') || '—'],
       [
         '',
         `${get(logB.meta, 'MARCA')} ${get(logB.meta, 'MODELO')}`.trim() || logB.sourceName,
         t('pdf.fin'),
-        get(logB.meta, 'FIN VIAJE') || '—',
+        opts.finOverride || get(logB.meta, 'FIN VIAJE') || '—',
       ],
       [
         t('vis.title'),
@@ -478,37 +513,7 @@ export async function exportComparePdfReport(
   })
 
   if (marks.length > 0) {
-    const head = [t('pdf.mark'), t('pdf.markTime')]
-    for (const name of selected) {
-      const unit =
-        logA.parameters.find((p) => p.name === name)?.unit ||
-        logB.parameters.find((p) => p.name === name)?.unit ||
-        ''
-      const labelParam = unit ? `${name} (${unit})` : name
-      if (opts.visibility !== 'b') head.push(`${labelParam} A`)
-      if (opts.visibility !== 'a') head.push(`${labelParam} B`)
-    }
-
-    const body = marks.map((m, i) => {
-      const row: string[] = [markLabel(i + 1), formatElapsed(m.time)]
-      for (const name of selected) {
-        if (opts.visibility !== 'b') {
-          row.push(
-            formatSampleValue(
-              sampleAtAxisTime(logA, name, m.time, opts.offsetA),
-            ),
-          )
-        }
-        if (opts.visibility !== 'a') {
-          row.push(
-            formatSampleValue(
-              sampleAtAxisTime(logB, name, m.time, opts.offsetB),
-            ),
-          )
-        }
-      }
-      return row
-    })
+    const chunks = chunkParams(selected, PDF_MARK_PARAMS_PER_TABLE_COMPARE)
 
     const needNewPage =
       chartPages.length === 0 || lastChartBottom > pageH - 160 || marks.length > 4
@@ -523,22 +528,76 @@ export async function exportComparePdfReport(
       doc.text(t('pdf.marksTitle'), pageW / 2, margin + 8, { align: 'center' })
     }
 
-    const startY = needNewPage
+    let startY = needNewPage
       ? margin + 28
       : Math.min(lastChartBottom + 16, pageH - 140)
 
-    autoTable(doc, {
-      startY,
-      theme: 'grid',
-      styles: { fontSize: 6.5, cellPadding: 2, textColor: [40, 40, 40] },
-      headStyles: {
-        fillColor: [230, 81, 0],
-        textColor: [255, 255, 255],
-        fontStyle: 'bold',
-      },
-      head: [head],
-      body,
-      margin: { left: margin, right: margin },
+    chunks.forEach((chunk, chunkIdx) => {
+      if (chunkIdx > 0) {
+        const prevY = (doc as jsPDF & { lastAutoTable: { finalY: number } })
+          .lastAutoTable.finalY
+        if (prevY > pageH - 140) {
+          drawFooter(doc, label, page, margin)
+          doc.addPage()
+          page += 1
+          drawTexaLogo(doc, logoDataUrl, pageW, margin, 12, 32)
+          doc.setFont('helvetica', 'bold')
+          doc.setFontSize(12)
+          doc.setTextColor(12, 37, 119)
+          doc.text(t('pdf.marksTitleCont'), pageW / 2, margin + 8, {
+            align: 'center',
+          })
+          startY = margin + 28
+        } else {
+          startY = prevY + 14
+        }
+      }
+
+      const head = [t('pdf.mark'), t('pdf.markTime')]
+      for (const name of chunk) {
+        const unit =
+          logA.parameters.find((p) => p.name === name)?.unit ||
+          logB.parameters.find((p) => p.name === name)?.unit ||
+          ''
+        const labelParam = unit ? `${name} (${unit})` : name
+        if (opts.visibility !== 'b') head.push(`${labelParam} A`)
+        if (opts.visibility !== 'a') head.push(`${labelParam} B`)
+      }
+
+      const body = marks.map((m, i) => {
+        const row: string[] = [markLabel(i + 1), formatElapsed(m.time)]
+        for (const name of chunk) {
+          if (opts.visibility !== 'b') {
+            row.push(
+              formatSampleValue(
+                sampleAtAxisTime(logA, name, m.time, opts.offsetA),
+              ),
+            )
+          }
+          if (opts.visibility !== 'a') {
+            row.push(
+              formatSampleValue(
+                sampleAtAxisTime(logB, name, m.time, opts.offsetB),
+              ),
+            )
+          }
+        }
+        return row
+      })
+
+      autoTable(doc, {
+        startY,
+        theme: 'grid',
+        styles: { fontSize: 6.5, cellPadding: 2, textColor: [40, 40, 40] },
+        headStyles: {
+          fillColor: [230, 81, 0],
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+        },
+        head: [head],
+        body,
+        margin: { left: margin, right: margin },
+      })
     })
 
     const afterMarks = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable

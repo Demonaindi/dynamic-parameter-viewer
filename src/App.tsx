@@ -18,18 +18,29 @@ import { exportComparePdfReport, exportPdfReport } from './lib/exportPdf'
 import {
   PDF_PANELS_PER_PAGE,
   alignOffsetsByPeak,
+  clampExportWindow,
   commonParamNames,
+  indicesFromPercent,
+  labelAtIndex,
   suggestAlignParams,
   type CompareVisibility,
+  type ExportWindow,
 } from './lib/chartOption'
 import type { ChartMark, CompareMark, ParsedLog } from './lib/types'
+import { isWebApp } from './lib/auth'
 import { useI18n } from './i18n/I18nContext'
 import './App.css'
 
 type AppMode = 'analisis' | 'comparativa'
 type ExportKind = 'analisis' | 'comparativa' | null
 
-const APP_NAME = 'Dynamic Parameter viewer'
+const APP_NAME = isWebApp()
+  ? 'TEXA Parameter Viewer'
+  : 'Dynamic Parameter viewer'
+
+type AppProps = {
+  onLogout?: () => void
+}
 
 function shortLabel(log: ParsedLog, fallback: string) {
   const marca = log.meta.MARCA || ''
@@ -38,12 +49,16 @@ function shortLabel(log: ParsedLog, fallback: string) {
   return name || log.sourceName || fallback
 }
 
-export default function App() {
+export default function App({ onLogout }: AppProps) {
   const { t } = useI18n()
   const [mode, setMode] = useState<AppMode>('analisis')
   const [workshop, setWorkshop] = useState<WorkshopInfo>(loadWorkshop)
   const [error, setError] = useState<string | null>(null)
   const [exportKind, setExportKind] = useState<ExportKind>(null)
+  const [exportWindow, setExportWindow] = useState<ExportWindow>({
+    startPercent: 0,
+    endPercent: 100,
+  })
 
   const [log, setLog] = useState<ParsedLog | null>(null)
   const [selected, setSelected] = useState<string[]>([])
@@ -162,22 +177,78 @@ export default function App() {
   const labelA = logA ? shortLabel(logA, 'A') : 'A'
   const labelB = logB ? shortLabel(logB, 'B') : 'B'
 
+  const exportRangePreview = useMemo(() => {
+    const win = clampExportWindow(exportWindow)
+    if (exportKind === 'analisis' && log) {
+      const { start, end } = indicesFromPercent(
+        log.timeSeconds.length,
+        win.startPercent,
+        win.endPercent,
+      )
+      return {
+        startLabel: labelAtIndex(log, start),
+        endLabel: labelAtIndex(log, end),
+      }
+    }
+    if (exportKind === 'comparativa' && logA) {
+      const { start, end } = indicesFromPercent(
+        logA.timeSeconds.length,
+        win.startPercent,
+        win.endPercent,
+      )
+      return {
+        startLabel: labelAtIndex(logA, start),
+        endLabel: labelAtIndex(logA, end),
+      }
+    }
+    return { startLabel: '—', endLabel: '—' }
+  }, [exportKind, exportWindow, log, logA])
+
   const runExport = async (data: WorkshopInfo) => {
     saveWorkshop(data)
     setWorkshop(data)
     setExporting(true)
     try {
+      const win = clampExportWindow(exportWindow)
+      const viewRange = {
+        start: win.startPercent,
+        end: win.endPercent,
+      }
       if (exportKind === 'analisis') {
         if (!log) return
+        const { start, end } = indicesFromPercent(
+          log.timeSeconds.length,
+          win.startPercent,
+          win.endPercent,
+        )
+        const marksInRange = marks
+          .filter((m) => m.index >= start && m.index <= end)
+          .map((m, i) => ({ ...m, id: `pdf-${i}` }))
         const pages = await renderPanelsToDataUrls(
           log,
           selected,
           PDF_PANELS_PER_PAGE,
-          marks,
+          marksInRange,
+          viewRange,
         )
-        await exportPdfReport(log, pages, data, t, { marks, selected })
+        await exportPdfReport(log, pages, data, t, {
+          marks: marksInRange,
+          selected,
+          inicioOverride: labelAtIndex(log, start),
+          finOverride: labelAtIndex(log, end),
+        })
       } else if (exportKind === 'comparativa') {
         if (!logA || !logB || compareSelected.length === 0) return
+        const { start, end } = indicesFromPercent(
+          logA.timeSeconds.length,
+          win.startPercent,
+          win.endPercent,
+        )
+        const t0 = logA.timeSeconds[start] ?? 0
+        const t1 = logA.timeSeconds[end] ?? t0
+        const marksInRange = compareMarks.filter(
+          (m) => m.time >= t0 + offsetA - 0.01 && m.time <= t1 + offsetA + 0.01,
+        )
         const pages = await renderComparePanelsToDataUrls(
           logA,
           logB,
@@ -186,7 +257,8 @@ export default function App() {
           offsetA,
           offsetB,
           PDF_PANELS_PER_PAGE,
-          compareMarks,
+          marksInRange,
+          viewRange,
         )
         await exportComparePdfReport(logA, logB, pages, data, t, {
           labelA,
@@ -194,8 +266,10 @@ export default function App() {
           offsetA,
           offsetB,
           visibility,
-          marks: compareMarks,
+          marks: marksInRange,
           selected: compareSelected,
+          inicioOverride: labelAtIndex(logA, start),
+          finOverride: labelAtIndex(logA, end),
         })
       }
       setExportKind(null)
@@ -218,6 +292,11 @@ export default function App() {
         </div>
         <div className="top-actions">
           <LangSwitcher />
+          {onLogout ? (
+            <button type="button" className="btn ghost logout-btn" onClick={onLogout}>
+              {t('login.logout')}
+            </button>
+          ) : null}
           <nav className="mode-tabs" aria-label="Mode">
             <button
               type="button"
@@ -239,7 +318,10 @@ export default function App() {
               type="button"
               className="btn primary"
               disabled={exporting || selected.length === 0}
-              onClick={() => setExportKind('analisis')}
+              onClick={() => {
+                setExportWindow({ startPercent: 0, endPercent: 100 })
+                setExportKind('analisis')
+              }}
             >
               {t('btn.exportPdf')}
             </button>
@@ -249,7 +331,10 @@ export default function App() {
               type="button"
               className="btn primary"
               disabled={exporting || compareSelected.length === 0}
-              onClick={() => setExportKind('comparativa')}
+              onClick={() => {
+                setExportWindow({ startPercent: 0, endPercent: 100 })
+                setExportKind('comparativa')
+              }}
             >
               {t('btn.exportPdf')}
             </button>
@@ -275,8 +360,6 @@ export default function App() {
                 </div>
                 <ParamSelector log={log} selected={selected} onChange={setSelected} />
                 <MarksPanel
-                  log={log}
-                  selected={selected}
                   marks={marks}
                   onRemove={(id) => setMarks((prev) => prev.filter((m) => m.id !== id))}
                   onClear={() => setMarks([])}
@@ -424,14 +507,7 @@ export default function App() {
                   }}
                 />
                 <MarksPanel
-                  mode="compare"
-                  logA={logA}
-                  logB={logB}
-                  selected={compareSelected}
                   marks={compareMarks}
-                  offsetA={offsetA}
-                  offsetB={offsetB}
-                  visibility={visibility}
                   onRemove={(id) =>
                     setCompareMarks((prev) => prev.filter((m) => m.id !== id))
                   }
@@ -491,6 +567,10 @@ export default function App() {
           value={workshop}
           onChange={setWorkshop}
           busy={exporting}
+          exportWindow={exportWindow}
+          onExportWindow={setExportWindow}
+          startLabel={exportRangePreview.startLabel}
+          endLabel={exportRangePreview.endLabel}
           onCancel={() => {
             if (!exporting) setExportKind(null)
           }}

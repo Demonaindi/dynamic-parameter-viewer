@@ -1,20 +1,21 @@
-import { useEffect, useId, useMemo, useRef } from 'react'
-import ReactECharts from 'echarts-for-react'
+import { useMemo } from 'react'
 import * as echarts from 'echarts'
-import type { EChartsType } from 'echarts'
 import type { CompareMark, ParsedLog } from '../lib/types'
 import {
   PANEL_HEIGHT,
-  buildComparePanelOption,
+  buildCompareStackedOption,
   buildCompareMarkExtras,
+  stackedChartHeight,
   COMPARE_COLOR_A,
   COMPARE_COLOR_B,
   formatElapsed,
   toSeriesPoints,
   yRange,
   type CompareVisibility,
+  type ZoomRange,
 } from '../lib/chartOption'
 import { useI18n } from '../i18n/I18nContext'
+import { MultiPanelChart } from './MultiPanelChart'
 
 type Props = {
   logA: ParsedLog
@@ -42,101 +43,36 @@ export function CompareCharts({
   onToggleMark,
 }: Props) {
   const { t } = useI18n()
-  const groupId = useId().replace(/:/g, '')
-  const instances = useRef<EChartsType[]>([])
-  const clickCleanups = useRef<Array<() => void>>([])
-  const params = useMemo(() => selected, [selected])
-  const onToggleRef = useRef(onToggleMark)
-  onToggleRef.current = onToggleMark
+  const option = useMemo(
+    () =>
+      buildCompareStackedOption(logA, logB, selected, visibility, {
+        labelA,
+        labelB,
+        offsetA,
+        offsetB,
+        marks,
+      }),
+    [logA, logB, selected, visibility, labelA, labelB, offsetA, offsetB, marks],
+  )
 
-  useEffect(() => {
-    if (instances.current.length > 0) echarts.connect(groupId)
-    return () => {
-      echarts.disconnect(groupId)
-      clickCleanups.current.forEach((fn) => fn())
-      clickCleanups.current = []
-    }
-  }, [groupId, params.length, visibility, offsetA, offsetB])
-
-  if (params.length === 0) {
+  if (selected.length === 0) {
     return <div className="charts-empty">{t('params.emptyCommon')}</div>
   }
 
-  const attachClick = (chart: EChartsType) => {
-    const zr = chart.getZr()
-    let down: { x: number; y: number } | null = null
-
-    const onDown = (e: { offsetX: number; offsetY: number }) => {
-      down = { x: e.offsetX, y: e.offsetY }
-    }
-
-    const onUp = (e: { offsetX: number; offsetY: number }) => {
-      if (!down || !onToggleRef.current) {
-        down = null
-        return
-      }
-      const dx = Math.abs(e.offsetX - down.x)
-      const dy = Math.abs(e.offsetY - down.y)
-      down = null
-      if (dx > 6 || dy > 6) return
-      if (!chart.containPixel('grid', [e.offsetX, e.offsetY])) return
-      const point = chart.convertFromPixel({ seriesIndex: 0 }, [
-        e.offsetX,
-        e.offsetY,
-      ])
-      if (!point || point[0] === undefined || Number.isNaN(Number(point[0]))) return
-      onToggleRef.current(Number(point[0]))
-    }
-
-    zr.on('mousedown', onDown)
-    zr.on('mouseup', onUp)
-    clickCleanups.current.push(() => {
-      zr.off('mousedown', onDown)
-      zr.off('mouseup', onUp)
-    })
-  }
-
-  const register = (idx: number, chart: EChartsType) => {
-    chart.group = groupId
-    instances.current[idx] = chart
-    attachClick(chart)
-    if (instances.current.filter(Boolean).length === params.length) {
-      echarts.connect(groupId)
-    }
+  const handleClick = (value: number) => {
+    if (!onToggleMark) return
+    if (Number.isNaN(value)) return
+    onToggleMark(value)
   }
 
   return (
-    <div className="charts-stack" data-group={groupId}>
-      {params.map((name, i) => {
-        const isLast = i === params.length - 1
-        const option = buildComparePanelOption(logA, logB, name, visibility, {
-          showXAxis: isLast,
-          showSlider: isLast,
-          labelA,
-          labelB,
-          offsetA,
-          offsetB,
-          marks,
-        })
-        const height = isLast ? PANEL_HEIGHT + 36 : PANEL_HEIGHT
-        return (
-          <div
-            key={`${name}-${offsetA}-${offsetB}-${visibility}`}
-            className="chart-panel"
-            style={{ height }}
-          >
-            <ReactECharts
-              option={option}
-              style={{ height: '100%', width: '100%' }}
-              notMerge
-              lazyUpdate
-              opts={{ renderer: 'canvas' }}
-              onChartReady={(instance) => register(i, instance)}
-            />
-          </div>
-        )
-      })}
-    </div>
+    <MultiPanelChart
+      option={option}
+      height={stackedChartHeight(selected.length)}
+      panelCount={selected.length}
+      resetKey={`${logA.sourceName}|${logB.sourceName}`}
+      onAxisClick={handleClick}
+    />
   )
 }
 
@@ -149,8 +85,10 @@ export async function renderComparePanelsToDataUrls(
   offsetB: number,
   panelsPerPage = 4,
   marks: CompareMark[] = [],
+  viewRange?: ZoomRange,
 ): Promise<string[]> {
   if (selected.length === 0) return []
+  const zoom = viewRange ?? { start: 0, end: 100 }
 
   const width = 1100
   const urls: string[] = []
@@ -298,6 +236,13 @@ export async function renderComparePanelsToDataUrls(
       grid: grids,
       xAxis: xAxes,
       yAxis: yAxes,
+      dataZoom: slice.map((_, i) => ({
+        type: 'inside',
+        xAxisIndex: i,
+        start: zoom.start,
+        end: zoom.end,
+        disabled: true,
+      })),
       series,
     })
 

@@ -1,23 +1,23 @@
-import { useEffect, useId, useMemo, useRef } from 'react'
-import ReactECharts from 'echarts-for-react'
+import { useMemo } from 'react'
 import * as echarts from 'echarts'
-import type { EChartsType } from 'echarts'
 import type { ChartMark, ParsedLog } from '../lib/types'
 import {
   PANEL_HEIGHT,
-  buildPanelOption,
+  buildStackedOption,
   resolveParams,
+  stackedChartHeight,
   buildSeriesMarkExtras,
+  type ZoomRange,
 } from '../lib/chartOption'
 import { CHART_COLORS } from '../lib/types'
 import { useI18n } from '../i18n/I18nContext'
+import { MultiPanelChart } from './MultiPanelChart'
 
 type Props = {
   log: ParsedLog
   selected: string[]
   marks?: ChartMark[]
   onToggleMark?: (index: number) => void
-  onReady?: (charts: EChartsType[]) => void
 }
 
 export function StackedCharts({
@@ -25,105 +25,33 @@ export function StackedCharts({
   selected,
   marks = [],
   onToggleMark,
-  onReady,
 }: Props) {
   const { t } = useI18n()
-  const groupId = useId().replace(/:/g, '')
-  const instances = useRef<EChartsType[]>([])
-  const clickCleanups = useRef<Array<() => void>>([])
   const params = useMemo(() => resolveParams(log, selected), [log, selected])
-  const onToggleRef = useRef(onToggleMark)
-  onToggleRef.current = onToggleMark
-  const logLenRef = useRef(log.timeLabels.length)
-  logLenRef.current = log.timeLabels.length
-
-  useEffect(() => {
-    if (instances.current.length > 0) {
-      echarts.connect(groupId)
-    }
-    return () => {
-      echarts.disconnect(groupId)
-      clickCleanups.current.forEach((fn) => fn())
-      clickCleanups.current = []
-    }
-  }, [groupId, params.length])
+  const option = useMemo(
+    () => buildStackedOption(log, params, marks),
+    [log, params, marks],
+  )
 
   if (params.length === 0) {
-    return (
-      <div className="charts-empty">{t('params.emptyCharts')}</div>
-    )
+    return <div className="charts-empty">{t('params.emptyCharts')}</div>
   }
 
-  const attachClick = (chart: EChartsType) => {
-    const zr = chart.getZr()
-    let down: { x: number; y: number } | null = null
-
-    const onDown = (e: { offsetX: number; offsetY: number }) => {
-      down = { x: e.offsetX, y: e.offsetY }
-    }
-
-    const onUp = (e: { offsetX: number; offsetY: number }) => {
-      if (!down || !onToggleRef.current) {
-        down = null
-        return
-      }
-      const dx = Math.abs(e.offsetX - down.x)
-      const dy = Math.abs(e.offsetY - down.y)
-      down = null
-      if (dx > 6 || dy > 6) return
-      if (!chart.containPixel('grid', [e.offsetX, e.offsetY])) return
-      const point = chart.convertFromPixel({ seriesIndex: 0 }, [
-        e.offsetX,
-        e.offsetY,
-      ])
-      if (!point || point[0] === undefined) return
-      const index = Math.round(Number(point[0]))
-      if (index < 0 || index >= logLenRef.current) return
-      onToggleRef.current(index)
-    }
-
-    zr.on('mousedown', onDown)
-    zr.on('mouseup', onUp)
-    clickCleanups.current.push(() => {
-      zr.off('mousedown', onDown)
-      zr.off('mouseup', onUp)
-    })
-  }
-
-  const register = (idx: number, chart: EChartsType) => {
-    chart.group = groupId
-    instances.current[idx] = chart
-    attachClick(chart)
-    if (instances.current.filter(Boolean).length === params.length) {
-      echarts.connect(groupId)
-      onReady?.(instances.current.slice(0, params.length))
-    }
+  const handleClick = (value: number) => {
+    if (!onToggleMark) return
+    const index = Math.round(value)
+    if (index < 0 || index >= log.timeLabels.length) return
+    onToggleMark(index)
   }
 
   return (
-    <div className="charts-stack" data-group={groupId}>
-      {params.map((param, i) => {
-        const isLast = i === params.length - 1
-        const option = buildPanelOption(log, param, i, {
-          showXAxis: isLast,
-          showSlider: isLast,
-          marks,
-        })
-        const height = isLast ? PANEL_HEIGHT + 36 : PANEL_HEIGHT
-        return (
-          <div key={param.name} className="chart-panel" style={{ height }}>
-            <ReactECharts
-              option={option}
-              style={{ height: '100%', width: '100%' }}
-              notMerge
-              lazyUpdate
-              opts={{ renderer: 'canvas' }}
-              onChartReady={(instance) => register(i, instance)}
-            />
-          </div>
-        )
-      })}
-    </div>
+    <MultiPanelChart
+      option={option}
+      height={stackedChartHeight(params.length)}
+      panelCount={params.length}
+      resetKey={log.sourceName}
+      onAxisClick={handleClick}
+    />
   )
 }
 
@@ -132,9 +60,11 @@ export async function renderPanelsToDataUrls(
   selected: string[],
   panelsPerPage = 4,
   marks: ChartMark[] = [],
+  viewRange?: ZoomRange,
 ): Promise<string[]> {
   const params = resolveParams(log, selected)
   if (params.length === 0) return []
+  const zoom = viewRange ?? { start: 0, end: 100 }
 
   const width = 1100
   const urls: string[] = []
@@ -206,6 +136,13 @@ export async function renderPanelsToDataUrls(
           axisLine: { show: false },
         }
       }),
+      dataZoom: slice.map((_, i) => ({
+        type: 'inside',
+        xAxisIndex: i,
+        start: zoom.start,
+        end: zoom.end,
+        disabled: true,
+      })),
       series: slice.map((p, i) => {
         const color = CHART_COLORS[(start + i) % CHART_COLORS.length]
         const extras = buildSeriesMarkExtras(log, p, marks)
